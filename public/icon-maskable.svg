@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Aaj Ka Khana">
+  <rect width="64" height="64" fill="#0f7a5a" />
+  <circle cx="32" cy="33" r="13" fill="none" stroke="#fbf9f6" stroke-width="3" />
+  <circle cx="32" cy="33" r="7" fill="none" stroke="#fbf9f6" stroke-width="1.5" opacity=".7" />
+  <path d="M32 26v14M25 33h14" stroke="#fbf9f6" stroke-width="2" stroke-linecap="round" opacity=".55" />
+  <path d="M32 24c0-5 3.5-8.5 8-9.5 0 5-3 8.5-8 9.5z" fill="#c2610f" />
+</svg>

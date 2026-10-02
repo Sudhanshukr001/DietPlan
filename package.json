@@ -1,0 +1,45 @@
+{
+  "name": "diet-companion",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Personal daily health, nutrition, hydration and fitness companion",
+  "scripts": {
+    "dev": "NEXT_TEST_WASM=1 next dev --webpack",
+    "dev:native": "next dev --webpack",
+    "build": "NEXT_TEST_WASM=1 next build --webpack",
+    "build:native": "next build --webpack",
+    "start": "next start",
+    "start:native": "next start",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "verify": "npm run typecheck && npm run lint && npm run test"
+  },
+  "dependencies": {
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "idb-keyval": "^6.2.2",
+    "lucide-react": "^0.552.0",
+    "next": "16.3.8",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "tailwind-merge": "^3.3.1",
+    "zod": "^4.1.13",
+    "zustand": "^5.0.9"
+  },
+  "devDependencies": {
+    "@next/swc-wasm-nodejs": "^16.3.8",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitest/coverage-v8": "^5.0.3",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.8",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vitest": "^5.0.3"
+  }
+}
