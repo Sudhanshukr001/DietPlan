@@ -21,6 +21,8 @@ function inputs(over: Partial<DayInputs> = {}): DayInputs {
     snoozed: new Map(),
     streak: 3,
     isRestDay: false,
+    history: [] as never[],
+    availability: {},
     writtenAt: '2026-01-14T05:42:00.000Z',
     ...over,
   };
@@ -167,6 +169,8 @@ describe('persisted state round-trip through the pipeline', () => {
         snoozed: new Map(),
         streak: 0,
         isRestDay: false,
+        history: [] as never[],
+        availability: {},
         writtenAt: '2026-01-14T05:42:00.000Z',
       },
       ctx,

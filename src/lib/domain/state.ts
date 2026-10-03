@@ -1,4 +1,5 @@
 import type {
+  AvailabilityMap,
   CalendarDay,
   DietPreference,
   FoodKey,
@@ -13,6 +14,40 @@ import { addDays, toCalendarDay } from './time';
 import { DEFAULT_SETTINGS } from './notifications';
 import { CONDITION_LABELS, DECLARED_CONDITION_VALUES } from './safety';
 import { hasFood } from './data/foods';
+
+/**
+ * Fill in fields that newer schema versions added.
+ *
+ * Snapshots written by an older build are kept as-is on purpose — they are the
+ * record of what the user actually ate, and rewriting them would be exactly the
+ * data loss this app is supposed to avoid. But `foodFocus` and `costProjection`
+ * did not exist then, so anything reading them off an old snapshot would find
+ * `undefined`. Backfilling the absent fields keeps the type honest without
+ * touching the meals, which are the part that matters.
+ */
+function migrateSnapshots(raw: unknown): PersistedShape['snapshots'] {
+  if (!isRecord(raw)) return {};
+  const out: PersistedShape['snapshots'] = {};
+  for (const [date, value] of Object.entries(raw)) {
+    if (!isRecord(value) || typeof value.meals !== 'object') continue;
+    const snapshot = value as unknown as PersistedShape['snapshots'][string];
+    out[date] = {
+      ...snapshot,
+      foodFocus: snapshot.foodFocus ?? { vegetable: null, fruit: null },
+      costProjection:
+        snapshot.costProjection ??
+        ({
+          daily: { value: 0, low: 0, high: 0 },
+          weekly: { value: 0, low: 0, high: 0 },
+          monthly: { value: 0, low: 0, high: 0 },
+          budget: 0,
+          withinBudget: true,
+          basis: 'Not recorded for this day.',
+        } as unknown as PersistedShape['snapshots'][string]['costProjection']),
+    };
+  }
+  return out;
+}
 
 /** A single safe place that produces a valid, complete app state. */
 export function blankState(today: CalendarDay): PersistedShape {
@@ -30,6 +65,9 @@ export function blankState(today: CalendarDay): PersistedShape {
     firedReminders: [],
     weeklyReviews: [],
     pantry: {},
+    availability: {},
+    planRevisions: {},
+    dayPreferences: {},
     localPriceOverrides: {},
     completedEvents: {},
     snoozedUntil: {},
@@ -51,6 +89,19 @@ export interface PersistedShape {
   firedReminders: import('./types/index').FiredReminder[];
   weeklyReviews: import('./types/index').WeeklyReview[];
   pantry: Record<string, { quantity: import('./types/index').Portion; updatedAt: string }>;
+  /**
+   * What the user says they can actually get hold of. Absent means "no opinion",
+   * which is not the same as unavailable — the engine only drops a food on an
+   * explicit signal.
+   */
+  availability: AvailabilityMap;
+  /**
+   * Intentional plan edits, keyed by date. A revision records *why* a day was
+   * regenerated so the reason survives a reload instead of being a one-off toast.
+   */
+  planRevisions: Record<string, import('./types/index').PlanRevision>;
+  /** Per-day pins and exclusions the user set for one specific date. */
+  dayPreferences: Record<string, import('./types/index').DayPreference>;
   localPriceOverrides: Record<string, number>;
   /** eventId -> day the completion belongs to. */
   completedEvents: Record<string, string>;
@@ -124,7 +175,7 @@ export function migrate(raw: unknown): PersistedShape {
         }
       : defaultHealth(),
     settings,
-    snapshots: isRecord(raw.snapshots) ? (raw.snapshots as PersistedShape['snapshots']) : {},
+    snapshots: migrateSnapshots(raw.snapshots),
     hydration: array(raw.hydration),
     workouts: array(raw.workouts),
     sleep: array(raw.sleep),
@@ -133,6 +184,15 @@ export function migrate(raw: unknown): PersistedShape {
     firedReminders: array(raw.firedReminders),
     weeklyReviews: array(raw.weeklyReviews),
     pantry: isRecord(raw.pantry) ? (raw.pantry as PersistedShape['pantry']) : {},
+    availability: isRecord(raw.availability)
+      ? (raw.availability as PersistedShape['availability'])
+      : {},
+    planRevisions: isRecord(raw.planRevisions)
+      ? (raw.planRevisions as PersistedShape['planRevisions'])
+      : {},
+    dayPreferences: isRecord(raw.dayPreferences)
+      ? (raw.dayPreferences as PersistedShape['dayPreferences'])
+      : {},
     localPriceOverrides: isRecord(raw.localPriceOverrides) ? (raw.localPriceOverrides as Record<string, number>) : {},
     completedEvents: isRecord(raw.completedEvents) ? (raw.completedEvents as Record<string, string>) : {},
     snoozedUntil: isRecord(raw.snoozedUntil) ? (raw.snoozedUntil as Record<string, number>) : {},

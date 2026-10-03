@@ -17,6 +17,7 @@ import { ACTIVITY_LABELS, GOAL_DESCRIPTIONS, GOAL_LABELS } from '@/lib/domain/nu
 import { LEVEL_DESCRIPTIONS, LEVEL_LABELS } from '@/lib/domain/fitness';
 import { defaultDiet, defaultHealth, defaultProfile, defaultSettings } from '@/lib/domain/defaults';
 import { parseMinute24 } from '@/lib/domain/time';
+import { normaliseNumericText, parseNumericText, sanitizeNumericText } from '@/lib/domain/units';
 import type {
   ActivityLevel,
   DeclaredCondition,
@@ -36,10 +37,16 @@ import { BrandMark } from './brand';
 
 interface Draft {
   name: string;
-  age: number;
+  /**
+   * Numeric fields are held as text, not numbers. `Number(e.target.value)` turns
+   * a cleared field into 0 and writes it back, so the user can never leave it
+   * empty and a typo becomes a silent valid-looking value. Text is parsed once,
+   * at validation and at submit, where a failure can actually be reported.
+   */
+  age: string;
   sex: Sex;
-  heightCm: number;
-  weightKg: number;
+  heightCm: string;
+  weightKg: string;
   region: Profile['region'];
   city: string;
   activityLevel: ActivityLevel;
@@ -48,7 +55,7 @@ interface Draft {
   dietType: DietType;
   allergies: FoodKey[];
   conditions: DeclaredCondition[];
-  dailyBudget: number;
+  dailyBudget: string;
   wake: string;
   sleep: string;
   exerciseMinute: string;
@@ -59,10 +66,10 @@ function initialDraft(): Draft {
   const base = defaultProfile();
   return {
     name: '',
-    age: base.age,
+    age: String(base.age),
     sex: base.sex,
-    heightCm: base.heightCm,
-    weightKg: base.weightKg,
+    heightCm: String(base.heightCm),
+    weightKg: String(base.weightKg),
     region: base.region,
     city: '',
     activityLevel: base.activityLevel,
@@ -71,7 +78,7 @@ function initialDraft(): Draft {
     dietType: 'vegetarian',
     allergies: [],
     conditions: [],
-    dailyBudget: 150,
+    dailyBudget: '150',
     wake: '07:00',
     sleep: '23:00',
     exerciseMinute: '18:00',
@@ -126,13 +133,21 @@ export function Onboarding({
     }));
   };
 
+  const age = parseNumericText(draft.age);
+  const heightCm = parseNumericText(draft.heightCm);
+  const weightKg = parseNumericText(draft.weightKg, 1);
+  const dailyBudget = parseNumericText(draft.dailyBudget);
+
   const valid =
-    draft.age >= 13 &&
-    draft.age <= 100 &&
-    draft.heightCm >= 120 &&
-    draft.heightCm <= 230 &&
-    draft.weightKg >= 30 &&
-    draft.weightKg <= 200;
+    age !== null &&
+    age >= 13 &&
+    age <= 100 &&
+    heightCm !== null &&
+    heightCm >= 120 &&
+    heightCm <= 230 &&
+    weightKg !== null &&
+    weightKg >= 30 &&
+    weightKg <= 200;
 
   const finish = (): void => {
     const base = defaultProfile();
@@ -146,10 +161,10 @@ export function Onboarding({
       profile: {
         ...base,
         name: draft.name.trim(),
-        age: Math.round(draft.age),
+        age: Math.round(age ?? base.age),
         sex: draft.sex,
-        heightCm: Math.round(draft.heightCm),
-        weightKg: Math.round(draft.weightKg * 10) / 10,
+        heightCm: Math.round(heightCm ?? base.heightCm),
+        weightKg: Math.round((weightKg ?? base.weightKg) * 10) / 10,
         region: draft.region,
         city: draft.city.trim(),
         activityLevel: draft.activityLevel,
@@ -168,7 +183,7 @@ export function Onboarding({
       },
       diet: { ...dietBase, dietType: draft.dietType, allergies: [...new Set(draft.allergies)] },
       health: { ...healthBase, declaredConditions: draft.conditions },
-      settings: { ...settingsBase, dailyBudget: Math.round(draft.dailyBudget) },
+      settings: { ...settingsBase, dailyBudget: Math.round(dailyBudget ?? settingsBase.dailyBudget) },
     });
   };
 
@@ -223,7 +238,8 @@ export function Onboarding({
                   min={13}
                   max={100}
                   value={draft.age}
-                  onChange={(e) => set('age', Number(e.target.value))}
+                  onChange={(e) => set('age', sanitizeNumericText(e.target.value))}
+                  onBlur={(e) => set('age', normaliseNumericText(e.target.value))}
                 />
               </Field>
               <Field label="Sex" hint="Used only for the energy formula">
@@ -246,7 +262,8 @@ export function Onboarding({
                   min={120}
                   max={230}
                   value={draft.heightCm}
-                  onChange={(e) => set('heightCm', Number(e.target.value))}
+                  onChange={(e) => set('heightCm', sanitizeNumericText(e.target.value))}
+                  onBlur={(e) => set('heightCm', normaliseNumericText(e.target.value))}
                 />
               </Field>
               <Field label="Weight" hint="kg">
@@ -258,7 +275,8 @@ export function Onboarding({
                   max={200}
                   step={0.5}
                   value={draft.weightKg}
-                  onChange={(e) => set('weightKg', Number(e.target.value))}
+                  onChange={(e) => set('weightKg', sanitizeNumericText(e.target.value, 1))}
+                  onBlur={(e) => set('weightKg', normaliseNumericText(e.target.value, 1))}
                 />
               </Field>
             </div>
@@ -342,7 +360,8 @@ export function Onboarding({
                   max={2000}
                 step={10}
                   value={draft.dailyBudget}
-                  onChange={(e) => set('dailyBudget', Number(e.target.value))}
+                  onChange={(e) => set('dailyBudget', sanitizeNumericText(e.target.value))}
+                  onBlur={(e) => set('dailyBudget', normaliseNumericText(e.target.value))}
                 />
               </div>
             </Field>

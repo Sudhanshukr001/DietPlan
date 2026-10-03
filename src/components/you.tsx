@@ -3,6 +3,7 @@
 import type { AppStore } from '@/lib/app/store';
 import { Button, Card, Field, SectionTitle, Stat } from './ui';
 import { useMemo, useState } from 'react';
+import { clampNumber, parseNumericText } from '@/lib/domain/units';
 
 interface YouProps {
   readonly store: AppStore;
@@ -12,6 +13,8 @@ export function You({ store }: YouProps): React.ReactNode {
   const p = store.profile;
   const s = store.state.settings;
   const [name, setName] = useState(p?.name ?? '');
+  // Text while editing. `Number(exercise) || 0` looked harmless but meant that
+  // clearing the field and hitting Save wrote 0 minutes, with no warning.
   const [exercise, setExercise] = useState(String(p?.exerciseMinutesPerDay ?? 30));
   const [budget, setBudget] = useState(String(s.dailyBudget ?? 150));
   const [city, setCity] = useState(p?.city ?? '');
@@ -74,13 +77,20 @@ export function You({ store }: YouProps): React.ReactNode {
           <div className="flex justify-end">
             <Button
               onClick={() => {
+                // An empty field means "leave it alone", not "set it to zero".
+                const nextExercise = parseNumericText(exercise);
+                const nextBudget = parseNumericText(budget);
                 store.updateProfile({
                   name: name.trim() || p.name,
                   city: city.trim() || p.city,
                   state: stateName.trim() || p.state,
-                  exerciseMinutesPerDay: Math.max(0, Math.min(90, Number(exercise) || 0)),
+                  ...(nextExercise !== null
+                    ? { exerciseMinutesPerDay: clampNumber(nextExercise, 0, 90) }
+                    : {}),
                 });
-                store.updateSettings({ dailyBudget: Math.max(0, Math.min(500, Number(budget) || 0)) });
+                if (nextBudget !== null) {
+                  store.updateSettings({ dailyBudget: clampNumber(nextBudget, 0, 500) });
+                }
               }}
             >
               Save changes

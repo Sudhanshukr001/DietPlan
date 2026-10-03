@@ -11,7 +11,10 @@
  */
 
 import type {
+  AvailabilityMap,
   CalendarDay,
+  CostProjection,
+  DayPreference,
   DaySnapshot,
   DietPreference,
   EngineContext,
@@ -19,6 +22,7 @@ import type {
   HealthPreference,
   HydrationEntry,
   HydrationTarget,
+  MealHistoryEntry,
   MinuteOfDay,
   NutritionTotals,
   Profile,
@@ -37,6 +41,7 @@ import { dailyTargets } from './nutrition';
 import { dietFilter } from './diet';
 import { regionMultiplier } from './seasonal';
 import { buildMealPlan, type MealPlan } from './meals';
+import { costProjection } from './costProjection';
 import { buildSchedule, resolveNow, sleepTargetHoursFor, type CompletedEvents } from './schedule';
 import { buildDailyGrocery } from './grocery';
 import { hydrationNudges, hydrationTarget } from './hydration';
@@ -61,6 +66,18 @@ export interface DayInputs {
   readonly snoozed: ReadonlyMap<string, MinuteOfDay>;
   readonly streak: number;
   readonly isRestDay: boolean;
+  /**
+   * Recorded days of eating, used to avoid repeating yesterday's meals. Keeping
+   * this in `DayInputs` rather than reading a store inside the pipeline is what
+   * keeps `buildDay` pure and replayable.
+   */
+  readonly history: readonly MealHistoryEntry[];
+  /** What the user actually said they can buy or find nearby. */
+  readonly availability: AvailabilityMap;
+  /** Pins and exclusions set for one specific date. */
+  readonly dayPreference?: DayPreference;
+  /** Mean daily spend across recent recorded days, once there are any. */
+  readonly recentDailyCost?: number | null;
   readonly writtenAt: string;
 }
 
@@ -82,6 +99,7 @@ export interface DayResult {
   readonly consumedMl: number;
   readonly season: SeasonId;
   readonly tz: string;
+  readonly costProjection: CostProjection;
 }
 
 export function buildDay(inputs: DayInputs, ctx: EngineContext): DayResult {
@@ -122,8 +140,15 @@ export function buildDay(inputs: DayInputs, ctx: EngineContext): DayResult {
     pantry: inputs.pantry,
     dailyBudget,
     priceOverrides: inputs.priceOverrides,
-    targets: { calories: targetNutrition.calories, protein: targetNutrition.protein },
+    targets: {
+      calories: targetNutrition.calories,
+      protein: targetNutrition.protein,
+      fiber: targetNutrition.fiber,
+    },
     isRestDay: inputs.isRestDay,
+    history: inputs.history,
+    availability: inputs.availability,
+    ...(inputs.dayPreference ? { dayPreference: inputs.dayPreference } : {}),
   });
 
   // --- Schedule ----------------------------------------------------------
@@ -200,6 +225,10 @@ export function buildDay(inputs: DayInputs, ctx: EngineContext): DayResult {
 
   // --- Budget ------------------------------------------------------------
   const budgetCheck = checkBudget(plan.totalCost.value, dailyBudget);
+  // Falls back to today's own figure until enough days of history exist to
+  // average, and says so in the `basis` string rather than inventing a trend.
+  const projection = costProjection(plan.totalCost.value, dailyBudget, inputs.recentDailyCost ?? null);
+
   const budgetPlan = buildBudgetPlan({
     dailyBudget,
     region: inputs.profile.region,
@@ -240,6 +269,8 @@ export function buildDay(inputs: DayInputs, ctx: EngineContext): DayResult {
     sleepPlan,
     hydrationTarget: hydTarget,
     advisory,
+    foodFocus: plan.focus,
+    costProjection: projection,
     writtenAt: inputs.writtenAt,
   };
 
@@ -261,6 +292,7 @@ export function buildDay(inputs: DayInputs, ctx: EngineContext): DayResult {
     consumedMl,
     season,
     tz: ctx.tz,
+    costProjection: projection,
   };
 }
 

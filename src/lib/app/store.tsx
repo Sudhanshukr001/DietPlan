@@ -20,6 +20,9 @@ import {
   type ReactNode,
 } from 'react';
 import { buildDay, type DayInputs, type DayResult } from '@/lib/domain/pipeline';
+import { historyFromSnapshots, ROTATION_WINDOW_DAYS } from '@/lib/domain/rotation';
+import { archiveDay } from '@/lib/domain/planArchive';
+import { typicalDailyCost } from '@/lib/domain/costProjection';
 import { blankState, type PersistedShape } from '@/lib/domain/state';
 import {
   dayOfWeekFor,
@@ -85,6 +88,27 @@ export interface AppStore {
   updateProfile(patch: EditableProfile): void;
   updateSettings(patch: Partial<UserSettings>): void;
   reset(): void;
+}
+
+/** Local storage is bounded; keep a season of plans, not a year. */
+const SNAPSHOT_RETENTION_DAYS = 90;
+
+/**
+ * What the last few recorded days actually cost, newest first.
+ *
+ * Without this the weekly and monthly figures are just today's plan times seven,
+ * which is a multiplication dressed up as a projection. A real average is the
+ * honest basis, and `typicalDailyCost` says in its `basis` string which one is
+ * being shown so the number never pretends to know more than it does.
+ */
+function recentSpend(snapshots: NonNullable<PersistedShape['snapshots']>): { date: string; rupees: number }[] {
+  return Object.entries(snapshots)
+    .sort(([a], [b]) => (a < b ? 1 : -1))
+    .map(([date, snapshot]) => ({
+      date,
+      rupees: snapshot.meals.reduce((sum, meal) => sum + (meal.cost?.value ?? 0), 0),
+    }))
+    .filter((entry) => entry.rupees > 0);
 }
 
 const StoreContext = createContext<AppStore | null>(null);
@@ -168,6 +192,7 @@ export function AppStoreProvider({ children }: { readonly children: ReactNode })
   // never drift apart in how they are derived.
   const inputsFor = useCallback(
     (date: CalendarDay): DayInputs => ({
+      // Rotation memory comes from recorded snapshots.
       profile: profile as Profile,
       diet: state.diet,
       health: state.health,
@@ -186,6 +211,12 @@ export function AppStoreProvider({ children }: { readonly children: ReactNode })
       snoozed: new Map(Object.entries(state.snoozedUntil).map(([id, minute]) => [id, Number(minute)])),
       streak: 0,
       isRestDay: false,
+      // Only days that were actually recorded feed rotation, and never today's
+      // own plan — otherwise planning today would penalise the food it just chose.
+      history: historyFromSnapshots(state.snapshots, ROTATION_WINDOW_DAYS, date),
+      recentDailyCost: typicalDailyCost(recentSpend(state.snapshots)),
+      availability: state.availability,
+      dayPreference: state.dayPreferences[date],
       writtenAt: now ? now.toISOString() : '',
     }),
     [profile, state, now],
@@ -195,6 +226,33 @@ export function AppStoreProvider({ children }: { readonly children: ReactNode })
     if (!profile || !now) return null;
     return buildDay(inputsFor(today), contextAt(now));
   }, [inputsFor, profile, now, today]);
+
+  // Record the day once it has been planned. Without this, `snapshots` stayed
+  // empty forever and the anti-repetition memory had nothing to remember, so the
+  // same meals came back every day.
+  //
+  // The decision lives in `archiveDay` so it can be proven idempotent. This
+  // version of the logic sat inline and looped forever on a profile edit.
+  useEffect(() => {
+    if (!day) return;
+    const decision = archiveDay({
+      today,
+      snapshot: day.snapshot,
+      snapshots: state.snapshots,
+      revisions: state.planRevisions,
+      retentionDays: SNAPSHOT_RETENTION_DAYS,
+    });
+    if (!decision.write) return;
+    const { snapshots, revision } = decision;
+    dispatch({
+      type: 'update',
+      fn: (prev) => ({
+        ...prev,
+        snapshots,
+        ...(revision ? { planRevisions: { ...prev.planRevisions, [revision.date]: revision } } : {}),
+      }),
+    });
+  }, [day, state.snapshots, state.planRevisions, today]);
 
   const upcoming = useMemo<readonly DayResult[]>(() => {
     if (!profile || !now) return [];

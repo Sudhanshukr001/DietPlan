@@ -8,7 +8,7 @@
  */
 
 export const MINUTES_PER_DAY = 1440;
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 // ---------------------------------------------------------------------------
 // Core wrappers
@@ -235,6 +235,10 @@ export type FoodKey =
   | 'mushroom'
   | 'cucumber'
   | 'radish'
+  | 'peas'
+  | 'methi'
+  | 'bathua'
+  | 'bhindi'
   | 'beetroot'
   | 'bottle-gourd'
   // Fruits
@@ -801,6 +805,7 @@ export interface FiredReminder {
 export interface DaySnapshot {
   readonly date: CalendarDay;
   readonly tz: string;
+  /** Hash of the profile *and* diet inputs that produced this snapshot. */
   readonly profileHash: string;
   readonly meals: readonly Meal[];
   readonly schedule: DailySchedule;
@@ -810,7 +815,126 @@ export interface DaySnapshot {
   readonly sleepPlan: SleepPlan;
   readonly hydrationTarget: HydrationTarget;
   readonly advisory: AdvisoryMode;
+  /**
+   * Why the day looks the way it does — the vegetable and fruit it was steered
+   * toward, and the reason. Stored with the snapshot so a past day can explain
+   * itself without re-running the engine.
+   */
+  readonly foodFocus: DailyFocus;
+  readonly costProjection: CostProjection;
   readonly writtenAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Meal history + rotation (the anti-repetition memory)
+// ---------------------------------------------------------------------------
+
+/** One recorded day of eating, kept small on purpose — only what rotation needs. */
+export interface MealHistoryEntry {
+  readonly date: CalendarDay;
+  /** mealId -> the food keys that meal actually used. */
+  readonly meals: Readonly<Record<string, readonly FoodKey[]>>;
+}
+
+export type FoodAvailabilityState =
+  /** Sold nearby and affordable — no penalty. */
+  | 'available'
+  /** In season and well priced here — a small bonus. */
+  | 'local'
+  /** Carries a hard penalty; the engine avoids it unless nothing else fits. */
+  | 'unavailable'
+  /** Pricey for this user; deprioritised but never forbidden. */
+  | 'too-expensive';
+
+export type FoodPreference = 'favourite' | 'neutral' | 'disliked';
+
+/** Per-food user signals. Absent key == 'available' + 'neutral'. */
+export type AvailabilityMap = Partial<
+  Record<FoodKey, { readonly availability: FoodAvailabilityState; readonly preference: FoodPreference }>
+>;
+
+export interface AvailabilitySummary {
+  readonly unavailable: readonly FoodKey[];
+  readonly tooExpensive: readonly FoodKey[];
+  readonly favourites: readonly FoodKey[];
+  readonly disliked: readonly FoodKey[];
+}
+
+// ---------------------------------------------------------------------------
+// Daily focus — the "what vegetable/fruit should I buy today" answer
+// ---------------------------------------------------------------------------
+
+export interface FoodFocusReason {
+  readonly label: string;
+  readonly detail: string;
+}
+
+export interface DailyFocusItem {
+  readonly kind: 'vegetable' | 'fruit';
+  readonly foodKey: FoodKey;
+  readonly name: string;
+  readonly localNames: readonly string[];
+  readonly emoji: string;
+  readonly grams: number;
+  readonly buyLabel: string;
+  readonly estimatedCost: Estimate<number>;
+  /** Where in the day it is actually used. */
+  readonly usedIn: readonly MealSlot[];
+  readonly why: FoodFocusReason;
+  readonly alternatives: readonly FoodFocusReason[];
+  readonly inSeason: boolean;
+}
+
+export interface DailyFocus {
+  readonly vegetable: DailyFocusItem | null;
+  readonly fruit: DailyFocusItem | null;
+}
+
+// ---------------------------------------------------------------------------
+// Cost projection (daily → weekly → monthly)
+// ---------------------------------------------------------------------------
+
+export interface CostProjection {
+  readonly daily: Estimate<number>;
+  readonly weekly: Estimate<number>;
+  readonly monthly: Estimate<number>;
+  readonly budget: number;
+  readonly withinBudget: boolean;
+  readonly basis: string;
+}
+
+// ---------------------------------------------------------------------------
+// Plan versioning + day lock
+// ---------------------------------------------------------------------------
+
+export type PlanRevisionReason =
+  | 'first-plan'
+  | 'profile-changed'
+  | 'diet-changed'
+  | 'budget-changed'
+  | 'allergy-changed'
+  | 'user-regenerated'
+  | 'user-locked';
+
+export interface PlanRevision {
+  /** Monotonic per user. Stored on the snapshot so old days stay historical. */
+  readonly version: number;
+  readonly reason: PlanRevisionReason;
+  readonly date: CalendarDay;
+  /** The profile/diet hash that was active when this revision was written. */
+  readonly profileHash: string;
+  /** Present when a revision replaced a plan the user had already seen. */
+  readonly previousProfileHash?: string;
+  readonly at?: string;
+}
+
+/** Per-day user overrides that survive recomputation. */
+export interface DayPreference {
+  readonly locked: boolean;
+  /** slot -> the food key the user pinned, so rotation must not override it. */
+  readonly pinned: Readonly<Partial<Record<MealSlot, FoodKey>>>;
+  /** slot -> food key the user said "I don't have this", excluded that day. */
+  readonly excluded: readonly FoodKey[];
 }
 
 // ---------------------------------------------------------------------------
