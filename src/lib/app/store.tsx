@@ -20,6 +20,7 @@ import {
   type ReactNode,
 } from 'react';
 import { buildDay, type DayInputs, type DayResult } from '@/lib/domain/pipeline';
+import { currentStreak } from '@/lib/domain/progress';
 import { historyFromSnapshots, ROTATION_WINDOW_DAYS } from '@/lib/domain/rotation';
 import { archiveDay } from '@/lib/domain/planArchive';
 import { typicalDailyCost } from '@/lib/domain/costProjection';
@@ -42,6 +43,7 @@ import type {
   Profile,
   SkipLog,
   SkipReason,
+  SleepLog,
   UserSettings,
   WeatherKind,
 } from '@/lib/domain/types/index';
@@ -60,7 +62,23 @@ function reducer(state: PersistedShape, action: Action): PersistedShape {
 }
 
 type EditableProfile = Partial<
-  Pick<Profile, 'name' | 'city' | 'state' | 'goal' | 'exerciseMinutesPerDay' | 'fitnessLevel' | 'hasGymAccess' | 'showBmi'>
+  Pick<
+    Profile,
+    | 'name'
+    | 'city'
+    | 'state'
+    | 'goal'
+    | 'exerciseMinutesPerDay'
+    | 'fitnessLevel'
+    | 'hasGymAccess'
+    | 'showBmi'
+    | 'age'
+    | 'heightCm'
+    | 'weightKg'
+    | 'activityLevel'
+    | 'sex'
+    | 'region'
+  >
 >;
 
 export interface AppStore {
@@ -84,9 +102,12 @@ export interface AppStore {
   uncompleteEvent(eventId: string): void;
   togglePantry(key: FoodKey): void;
   addWater(ml: number, day: CalendarDay, minute: MinuteOfDay): void;
+  /** Records (or clears) tonight's wind-down so the sleep meter can move. */
+  logSleep(day: CalendarDay, windDownCompleted: boolean): void;
   /** Editable from the You tab. Both reflow the plan through buildDay(). */
   updateProfile(patch: EditableProfile): void;
   updateSettings(patch: Partial<UserSettings>): void;
+  updateDiet(patch: Partial<Omit<DietPreference, 'userId'>>): void;
   reset(): void;
 }
 
@@ -112,6 +133,20 @@ function recentSpend(snapshots: NonNullable<PersistedShape['snapshots']>): { dat
 }
 
 const StoreContext = createContext<AppStore | null>(null);
+
+/**
+ * A day counts towards the streak when at least 40% of its meals were done.
+ * This used to be written as a literal 0, so every screen reading `streak`
+ * reported "no streak" however many good days came before it.
+ */
+function streakFromSnapshots(snapshots: PersistedShape['snapshots']): number {
+  const dailyFractions = Object.entries(snapshots)
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([, snapshot]) =>
+      snapshot.progress.mealsTotal > 0 ? snapshot.progress.mealsDone / snapshot.progress.mealsTotal : 0,
+    );
+  return currentStreak({ dailyFractions });
+}
 
 function contextAt(now: Date): EngineContext {
   return {
@@ -209,7 +244,7 @@ export function AppStoreProvider({ children }: { readonly children: ReactNode })
           .map(([id]) => id),
       ),
       snoozed: new Map(Object.entries(state.snoozedUntil).map(([id, minute]) => [id, Number(minute)])),
-      streak: 0,
+      streak: streakFromSnapshots(state.snapshots),
       isRestDay: false,
       // Only days that were actually recorded feed rotation, and never today's
       // own plan — otherwise planning today would penalise the food it just chose.
@@ -366,6 +401,27 @@ export function AppStoreProvider({ children }: { readonly children: ReactNode })
     });
   }, []);
 
+  // One entry per night: tapping again clears it rather than writing a second
+  // log for the same date.
+  const logSleep = useCallback<AppStore['logSleep']>((date, windDownCompleted) => {
+    dispatch({
+      type: 'update',
+      fn: (prev) => {
+        const others = prev.sleep.filter((s) => s.date !== date);
+        if (!windDownCompleted) return { ...prev, sleep: others };
+        const entry: SleepLog = {
+          id: `sleep_${date}`,
+          date,
+          bedtimeActual: null,
+          wakeMinute: prev.profile?.schedule.wakeMinute ?? 7 * 60,
+          windDownCompleted: true,
+          screensOff: true,
+        };
+        return { ...prev, sleep: [...others, entry] };
+      },
+    });
+  }, []);
+
   const updateProfile = useCallback<AppStore['updateProfile']>((patch) => {
     if (!profile) return;
     dispatch({
@@ -376,6 +432,10 @@ export function AppStoreProvider({ children }: { readonly children: ReactNode })
 
   const updateSettings = useCallback<AppStore['updateSettings']>((patch) => {
     dispatch({ type: 'update', fn: (prev) => ({ ...prev, settings: { ...prev.settings, ...patch } }) });
+  }, []);
+
+  const updateDiet = useCallback<AppStore['updateDiet']>((patch) => {
+    dispatch({ type: 'update', fn: (prev) => ({ ...prev, diet: { ...prev.diet, ...patch } }) });
   }, []);
 
   const reset = useCallback(() => {
@@ -397,11 +457,13 @@ export function AppStoreProvider({ children }: { readonly children: ReactNode })
     completeOnboarding,
     updateProfile,
     updateSettings,
+    updateDiet,
     completeEvent,
     skipEvent,
     uncompleteEvent,
     togglePantry,
     addWater,
+    logSleep,
     reset,
   };
 

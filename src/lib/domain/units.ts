@@ -23,6 +23,9 @@ export const WEIGHT_KG_MIN = 25;
 export const WEIGHT_KG_MAX = 250;
 export const AGE_MIN = 13;
 export const AGE_MAX = 100;
+/** One budget range for the form, the save button and the migration clamp. */
+export const BUDGET_MIN = 30;
+export const BUDGET_MAX = 2000;
 
 // ---------------------------------------------------------------------------
 // Weight
@@ -144,8 +147,11 @@ export function checkWeight(kg: number | null): RangeCheck {
 
 export function checkBudget(rupees: number | null): RangeCheck {
   if (rupees === null || Number.isNaN(rupees)) return { ok: false, message: 'Please enter a daily food budget.' };
-  if (rupees < 30 || rupees > 2000)
-    return { ok: false, message: 'Please enter a daily food budget between ₹30 and ₹2,000.' };
+  if (rupees < BUDGET_MIN || rupees > BUDGET_MAX)
+    return {
+      ok: false,
+      message: `Please enter a daily food budget between ₹${BUDGET_MIN} and ₹${BUDGET_MAX.toLocaleString('en-IN')}.`,
+    };
   return { ok: true, message: '' };
 }
 

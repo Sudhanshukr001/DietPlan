@@ -42,7 +42,13 @@ import { dietFilter } from './diet';
 import { regionMultiplier } from './seasonal';
 import { buildMealPlan, type MealPlan } from './meals';
 import { costProjection } from './costProjection';
-import { buildSchedule, resolveNow, sleepTargetHoursFor, type CompletedEvents } from './schedule';
+import {
+  buildSchedule,
+  deriveScheduleForProfile,
+  resolveNow,
+  sleepTargetHoursFor,
+  type CompletedEvents,
+} from './schedule';
 import { buildDailyGrocery } from './grocery';
 import { hydrationNudges, hydrationTarget } from './hydration';
 import { buildWorkout, focusForDate } from './fitness';
@@ -110,15 +116,20 @@ export function buildDay(inputs: DayInputs, ctx: EngineContext): DayResult {
   const filter = dietFilter(inputs.diet);
   const dailyBudget = inputs.settings.dailyBudget;
 
+  // The times the plan is built from are always re-derived from the wake and
+  // sleep times the user entered, so a profile saved by an older build (which
+  // kept fixed 8:30/13:30/20:00 meal times) still gets a plan that fits its day.
+  const profile = deriveScheduleForProfile(inputs.profile);
+
   // --- Nutrition targets -------------------------------------------------
   const targets = dailyTargets({
-    weightKg: inputs.profile.weightKg,
-    heightCm: inputs.profile.heightCm,
-    age: inputs.profile.age,
-    sex: inputs.profile.sex,
-    activityLevel: inputs.profile.activityLevel,
-    goal: inputs.profile.goal,
-    showBmi: inputs.profile.showBmi,
+    weightKg: profile.weightKg,
+    heightCm: profile.heightCm,
+    age: profile.age,
+    sex: profile.sex,
+    activityLevel: profile.activityLevel,
+    goal: profile.goal,
+    showBmi: profile.showBmi,
   });
 
   const advisory = advisoryFor(inputs.health);
@@ -133,7 +144,7 @@ export function buildDay(inputs: DayInputs, ctx: EngineContext): DayResult {
 
   // --- Meals -------------------------------------------------------------
   const plan = buildMealPlan({
-    profile: inputs.profile,
+    profile,
     diet: inputs.diet,
     date,
     season,
@@ -152,13 +163,13 @@ export function buildDay(inputs: DayInputs, ctx: EngineContext): DayResult {
   });
 
   // --- Schedule ----------------------------------------------------------
-  const sleepHours = sleepTargetHoursFor(inputs.profile.age);
+  const sleepHours = sleepTargetHoursFor(profile.age);
   const schedule = buildSchedule({
-    profile: inputs.profile,
+    profile,
     date,
     meals: plan.meals,
     context: ctx,
-    exerciseMinutes: inputs.isRestDay ? 0 : inputs.profile.exerciseMinutesPerDay,
+    exerciseMinutes: inputs.isRestDay ? 0 : profile.exerciseMinutesPerDay,
     isRestDay: inputs.isRestDay,
     sleepTargetHours: sleepHours,
   });
@@ -173,28 +184,28 @@ export function buildDay(inputs: DayInputs, ctx: EngineContext): DayResult {
   const resolution = resolveNow({ schedule, nowMinute, completed });
 
   // --- Fitness -----------------------------------------------------------
-  const focus = focusForDate(date, inputs.profile.fitnessLevel);
+  const focus = focusForDate(date, profile.fitnessLevel);
   const workout = buildWorkout({
-    profile: inputs.profile,
+    profile,
     date,
-    level: inputs.profile.fitnessLevel,
+    level: profile.fitnessLevel,
     focus,
     isRestDay: inputs.isRestDay,
   });
 
   // --- Sleep -------------------------------------------------------------
   const sleepPlan = buildSleepPlan({
-    wakeMinute: inputs.profile.schedule.wakeMinute,
-    sleepMinute: inputs.profile.schedule.sleepMinute,
-    age: inputs.profile.age,
+    wakeMinute: profile.schedule.wakeMinute,
+    sleepMinute: profile.schedule.sleepMinute,
+    age: profile.age,
     difficulty: inputs.health.sleepDifficulty,
   });
 
   // --- Hydration ---------------------------------------------------------
   const hydTarget = hydrationTarget({
-    weightKg: inputs.profile.weightKg,
-    activityLevel: inputs.profile.activityLevel,
-    exerciseMinutes: inputs.profile.exerciseMinutesPerDay,
+    weightKg: profile.weightKg,
+    activityLevel: profile.activityLevel,
+    exerciseMinutes: profile.exerciseMinutesPerDay,
     weather: ctx.weather.kind,
     ...(ctx.weather.temperatureC !== undefined ? { temperatureC: ctx.weather.temperatureC } : {}),
     fluidRestrictionCaution: advisory.fluidCaution,
@@ -203,10 +214,10 @@ export function buildDay(inputs: DayInputs, ctx: EngineContext): DayResult {
 
   const nudges = hydrationNudges({
     target: hydTarget,
-    wakeMinute: inputs.profile.schedule.wakeMinute,
-    sleepMinute: inputs.profile.schedule.sleepMinute,
+    wakeMinute: profile.schedule.wakeMinute,
+    sleepMinute: profile.schedule.sleepMinute,
     date,
-    exerciseMinute: inputs.isRestDay ? undefined : inputs.profile.schedule.exerciseMinute,
+    exerciseMinute: inputs.isRestDay ? undefined : profile.schedule.exerciseMinute,
   });
 
   const consumedMl = inputs.hydration
@@ -216,7 +227,7 @@ export function buildDay(inputs: DayInputs, ctx: EngineContext): DayResult {
   // --- Grocery -----------------------------------------------------------
   const grocery = buildDailyGrocery({
     meals: plan.meals,
-    region: inputs.profile.region,
+    region: profile.region,
     season,
     pantry: inputs.pantry,
     overrides: inputs.priceOverrides,
@@ -231,7 +242,7 @@ export function buildDay(inputs: DayInputs, ctx: EngineContext): DayResult {
 
   const budgetPlan = buildBudgetPlan({
     dailyBudget,
-    region: inputs.profile.region,
+    region: profile.region,
     season,
     filter,
     ...(Object.keys(inputs.priceOverrides).length > 0 ? { overrides: inputs.priceOverrides } : {}),
@@ -239,8 +250,11 @@ export function buildDay(inputs: DayInputs, ctx: EngineContext): DayResult {
 
   // --- Progress ----------------------------------------------------------
   const todayWorkoutLog = inputs.workouts.find((w) => w.date === date) ?? null;
-  // Sleep is logged against the night that BEGAN yesterday.
-  const sleepLog = inputs.sleep.find((s) => s.date === previousDay(date)) ?? null;
+  // Sleep is logged against the night that BEGAN yesterday. A log written for
+  // tonight's own night counts as well, so ticking "wind-down done" in the
+  // evening is reflected immediately instead of only tomorrow morning.
+  const sleepLog =
+    inputs.sleep.find((s) => s.date === date) ?? inputs.sleep.find((s) => s.date === previousDay(date)) ?? null;
 
   const dayLogs: DayLogs = {
     meals: plan.meals,

@@ -14,6 +14,16 @@ import { addDays, toCalendarDay } from './time';
 import { DEFAULT_SETTINGS } from './notifications';
 import { CONDITION_LABELS, DECLARED_CONDITION_VALUES } from './safety';
 import { hasFood } from './data/foods';
+import {
+  AGE_MAX,
+  AGE_MIN,
+  BUDGET_MAX,
+  BUDGET_MIN,
+  HEIGHT_CM_MAX,
+  HEIGHT_CM_MIN,
+  WEIGHT_KG_MAX,
+  WEIGHT_KG_MIN,
+} from './units';
 
 /**
  * Fill in fields that newer schema versions added.
@@ -144,7 +154,7 @@ export function migrate(raw: unknown): PersistedShape {
               delivery: pickEnum(raw.settings.notifications.delivery, ['auto', 'system', 'in-app', 'off'], 'auto'),
             }
           : DEFAULT_SETTINGS,
-        dailyBudget: clampNum(raw.settings.dailyBudget, 30, 1000, fallback.settings.dailyBudget),
+        dailyBudget: clampNum(raw.settings.dailyBudget, BUDGET_MIN, BUDGET_MAX, fallback.settings.dailyBudget),
       }
     : fallback.settings;
 
@@ -205,12 +215,12 @@ function migrateProfile(raw: unknown): Profile | null {
   return {
     userId: str(raw.userId, 'default'),
     name: str(raw.name, '').slice(0, 40),
-    age: clampNum(raw.age, 13, 100, 25),
+    age: clampNum(raw.age, AGE_MIN, AGE_MAX, 25),
     sex: pickEnum(raw.sex, ['female', 'male', 'other', 'prefer-not-to-say'], 'prefer-not-to-say'),
-    heightCm: clampNum(raw.heightCm, 120, 230, 165),
-    weightKg: clampNum(raw.weightKg, 30, 250, 60),
+    heightCm: clampNum(raw.heightCm, HEIGHT_CM_MIN, HEIGHT_CM_MAX, 165),
+    weightKg: clampNum(raw.weightKg, WEIGHT_KG_MIN, WEIGHT_KG_MAX, 60),
     ...(typeof raw.targetWeightKg === 'number'
-      ? { targetWeightKg: clampNum(raw.targetWeightKg, 30, 250, 60) }
+      ? { targetWeightKg: clampNum(raw.targetWeightKg, WEIGHT_KG_MIN, WEIGHT_KG_MAX, 60) }
       : {}),
     activityLevel: pickEnum(raw.activityLevel, ['sedentary', 'light', 'moderate', 'active', 'very-active'], 'light'),
     fitnessLevel: pickEnum(raw.fitnessLevel, ['beginner', 'intermediate', 'advanced'], 'beginner'),

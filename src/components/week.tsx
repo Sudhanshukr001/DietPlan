@@ -3,7 +3,7 @@
 import type { DayResult } from '@/lib/domain/pipeline';
 import type { CalendarDay } from '@/lib/domain/types/index';
 import { Card, SectionTitle, Stat } from './ui';
-import { dayOfWeekFor } from '@/lib/domain/time';
+import { startOfWeek } from '@/lib/domain/time';
 import { useMemo } from 'react';
 
 interface WeekProps {
@@ -11,17 +11,24 @@ interface WeekProps {
   readonly today: CalendarDay;
 }
 
-function formatDay(date: CalendarDay): string {
-  const parts = date.split('-').map((x) => Number(x));
+function dateFor(day: CalendarDay): Date {
+  const parts = day.split('-').map((x) => Number(x));
   const y = parts[0] ?? 1970;
   const m = parts[1] ?? 1;
   const d = parts[2] ?? 1;
-  const dt = new Date(y, m - 1, d);
-  return new Intl.DateTimeFormat('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }).format(dt);
+  return new Date(Date.UTC(y, m - 1, d));
+}
+
+function formatDay(date: CalendarDay): string {
+  return new Intl.DateTimeFormat('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }).format(
+    dateFor(date),
+  );
 }
 
 export function Week({ upcoming, today }: WeekProps): React.ReactNode {
-  const dow = useMemo(() => dayOfWeekFor(new Date(), 'Asia/Kolkata'), []);
+  // Monday-first start of the week that contains today, with its real weekday
+  // name — this row used to print the numeric day index ("Start of week: 4").
+  const weekStart = useMemo(() => startOfWeek(today, dateFor(today).getUTCDay()), [today]);
 
   return (
     <div className="mx-auto w-full max-w-2xl space-y-5 px-4 pb-[calc(4rem+env(safe-area-inset-bottom,0px))] pt-5">
@@ -35,7 +42,7 @@ export function Week({ upcoming, today }: WeekProps): React.ReactNode {
       <Card>
         <div className="flex items-center justify-between">
           <SectionTitle title="Week at a glance" />
-          <span className="text-xs text-ink-3">Start of week: {String(dow).slice(0, 3)}</span>
+          <span className="text-xs text-ink-3">Start of week: {formatDay(weekStart)}</span>
         </div>
         <div className="grid gap-2.5 sm:grid-cols-2">
           {upcoming.map((d) => {
@@ -57,7 +64,7 @@ export function Week({ upcoming, today }: WeekProps): React.ReactNode {
                 </div>
                 <div className="mt-2 grid grid-cols-3 gap-2">
                   <Stat value={d.targets.calories.value.toString()} label="kcal" />
-                  <Stat value={`${d.completed.done?.size ?? 0} done`} label="done" />
+                  <Stat value={`${d.snapshot.progress.mealsDone}/${d.snapshot.progress.mealsTotal}`} label="meals" />
                   <Stat value={`${Math.round(d.consumedMl / 1000 * 10) / 10}L`} label="water" />
                 </div>
               </div>

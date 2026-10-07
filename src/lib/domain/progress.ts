@@ -28,6 +28,7 @@ import type {
 import { PROGRESS_DISCLAIMER } from './types/index';
 import { getFood } from './data/foods';
 import { round1 } from './data/foods';
+import { exerciseEventId } from './schedule';
 
 export const SUCCESS_THRESHOLD = 0.4;
 export const ROUTINE_DISCLAIMER = PROGRESS_DISCLAIMER;
@@ -77,7 +78,14 @@ export function dailyProgress(date: CalendarDay, logs: DayLogs): DailyProgress {
   };
 
   const workoutTotal = logs.workout.blocks.length;
-  const workoutDone = logs.workoutLog?.completedBlockIds.length ?? 0;
+  // The movement event is tickable from the Today screen; a workout log (which
+  // nothing writes yet) still wins when one exists.
+  const exerciseMarked = logs.doneEventIds.has(exerciseEventId(date));
+  const workoutDone = logs.workoutLog
+    ? logs.workoutLog.completedBlockIds.length
+    : exerciseMarked
+      ? workoutTotal
+      : 0;
   const exercise: DomainProgress = {
     value: workoutTotal > 0 ? Math.min(1, workoutDone / workoutTotal) : 0,
     earned: workoutDone,

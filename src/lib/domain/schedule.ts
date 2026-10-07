@@ -22,6 +22,8 @@ import type {
   TimelineEvent,
   TimelineState,
 } from './types/index';
+import { MINUTES_PER_DAY } from './types/index';
+import { DEFAULT_SCHEDULE } from './defaults';
 import {
   clampMinute,
   hoursBetweenSleep,
@@ -147,14 +149,17 @@ export function buildSchedule(input: ScheduleBuildInput): DailySchedule {
   if (!isRestDay && input.exerciseMinutes > 0) {
     const exDuration = Math.min(input.exerciseMinutes, 45);
     const earliest = clampMinute(wake + 45);
-    const latestStart = clampMinute(pref.sleepMinute - exDuration - 30);
-    const exStart =
-      pref.exerciseMinute < earliest || pref.exerciseMinute > latestStart
-        ? clampMinute(Math.min(Math.max(pref.exerciseMinute, earliest), Math.max(earliest, latestStart)))
-        : clampMinute(pref.exerciseMinute);
-    const exEnd = clampMinute(exStart + exDuration);
+    // Bed can be after midnight; work unwrapped so the window is not inverted.
+    const bed = pref.sleepMinute < wake ? pref.sleepMinute + MINUTES_PER_DAY : pref.sleepMinute;
+    const requested =
+      pref.exerciseMinute < wake && bed >= MINUTES_PER_DAY
+        ? pref.exerciseMinute + MINUTES_PER_DAY
+        : pref.exerciseMinute;
+    const latestStart = Math.max(earliest, bed - exDuration - 30);
+    const exStart = wrapMinute(Math.min(Math.max(requested, earliest), latestStart));
+    const exEnd = wrapMinute(exStart + exDuration);
     events.push({
-      id: `${input.date}:exercise`,
+      id: exerciseEventId(input.date),
       kind: 'exercise',
       title: 'Movement time',
       detail: `${exDuration} minutes — walking and simple bodyweight exercises.`,
@@ -334,8 +339,13 @@ export function resolveNow(input: ResolveInput): ScheduleResolution {
   const isFinished = (e: TimelineEvent): boolean =>
     completed.done?.has(e.id) === true || completed.skipped?.has(e.id) === true;
 
-  const totalCount = events.filter((e) => !e.optional).length;
-  const completedCount = events.filter((e) => !e.optional && isFinished(e)).length;
+  // Only events the user can actually settle count towards the day's total.
+  // Wake, wind-down, sleep-prep and sleep are guidance — there is no control for
+  // them anywhere, so counting them made "5 of 9 things done" the permanent best
+  // case and made the "All done" state unreachable even on a perfect day.
+  const countable = (e: TimelineEvent): boolean => e.kind === 'meal' || e.kind === 'exercise';
+  const totalCount = events.filter(countable).length;
+  const completedCount = events.filter((e) => countable(e) && isFinished(e)).length;
 
   // 1. Snoozed items jump the queue — the user explicitly asked for this one.
   const snoozed = events.filter((e) => {
@@ -542,6 +552,114 @@ export function suggestedWindows(
     exerciseMinute: clampMinute(dinner - (goal === 'build-muscle' ? 120 : 90)),
     dinnerMinute: dinner,
     sleepMinute: clampMinute(dinner + 150),
+  };
+}
+
+/** `dinner` must finish before wind-down starts; `lo` keeps the day ordered. */
+function clampBetween(value: number, lo: number, hi: number): number {
+  return hi >= lo ? clampMinute(Math.max(lo, Math.min(value, hi))) : clampMinute(lo);
+}
+
+/**
+ * The meal times the plan is actually built from, derived from the two times a
+ * user really enters: when they wake and when they sleep.
+ *
+ * Before this, onboarding collected wake/sleep but every meal kept the fixed
+ * 8:30/13:30/20:00 defaults, so a 6 AM riser got breakfast after they had
+ * already been up for hours and a 9 PM sleeper got a dinner window that closed
+ * after bedtime. Nothing here overrides an explicit user time — the wake,
+ * sleep and exercise minutes come straight back in.
+ */
+export function deriveSchedule(input: {
+  readonly wakeMinute: MinuteOfDay;
+  readonly sleepMinute: MinuteOfDay;
+  readonly exerciseMinute: MinuteOfDay;
+  readonly chronotype: DailySchedulePreference['chronotype'];
+  readonly workPattern: DailySchedulePreference['workPattern'];
+  readonly goal: FitnessGoal;
+  /**
+   * What the profile had before this run. A meal time the user actually set
+   * (anything that is not still the factory default) is kept as-is; only the
+   * untouched ones are re-derived from wake/sleep.
+   */
+  readonly current?: DailySchedulePreference;
+}): DailySchedulePreference {
+  const wake = clampMinute(input.wakeMinute);
+  const sleep = clampMinute(input.sleepMinute);
+  const suggested = suggestedWindows(wake, input.chronotype, input.goal);
+
+  // Bed after midnight sits on an unwrapped axis, so "dinner before wind-down"
+  // never turns into a negative minute for a 1 AM bedtime.
+  const bed = sleep < wake ? sleep + MINUTES_PER_DAY : sleep;
+  const beforeWindDown = bed - 75 - DEFAULT_MEAL_WINDOW;
+
+  const keep = (
+    key:
+      | 'breakfastMinute'
+      | 'fruitMinute'
+      | 'lunchMinute'
+      | 'snackMinute'
+      | 'dinnerMinute',
+    derived: MinuteOfDay,
+  ): MinuteOfDay => {
+    const mine = input.current?.[key];
+    return mine !== undefined && mine !== DEFAULT_SCHEDULE[key] ? mine : derived;
+  };
+
+  const breakfast = keep('breakfastMinute', suggested.breakfastMinute);
+  const lunch = keep('lunchMinute', suggested.lunchMinute);
+  const dinner = clampBetween(
+    keep('dinnerMinute', suggested.dinnerMinute),
+    lunch + 90,
+    beforeWindDown,
+  );
+
+  return {
+    ...suggested,
+    wakeMinute: wake,
+    breakfastMinute: breakfast,
+    fruitMinute: clampBetween(
+      keep('fruitMinute', suggested.fruitMinute),
+      breakfast + 60,
+      Math.max(breakfast + 60, lunch - 60),
+    ),
+    lunchMinute: lunch,
+    snackMinute: clampBetween(
+      keep('snackMinute', suggested.snackMinute),
+      lunch + 60,
+      Math.max(lunch + 60, dinner - 60),
+    ),
+    dinnerMinute: dinner,
+    exerciseMinute: clampMinute(input.exerciseMinute),
+    sleepMinute: sleep,
+    chronotype: input.chronotype,
+    workPattern: input.workPattern,
+  };
+}
+
+/** The one id the movement event is ticked off with, in the engine and the UI. */
+export function exerciseEventId(date: CalendarDay): string {
+  return `${date}:exercise`;
+}
+
+/**
+ * A copy of the profile whose meal times are re-derived from its wake and sleep
+ * times. Every build runs through this, so there is exactly one place where the
+ * plan learns when the user's day starts and ends.
+ */
+export function deriveScheduleForProfile(profile: Profile): Profile {
+  const pref = profile.schedule;
+  return {
+    ...profile,
+    schedule: deriveSchedule({
+      wakeMinute: pref.wakeMinute,
+      sleepMinute: pref.sleepMinute,
+      exerciseMinute: pref.exerciseMinute,
+      chronotype: pref.chronotype,
+      workPattern: pref.workPattern,
+      goal: profile.goal,
+      current: pref,
+    }),
   };
 }
 

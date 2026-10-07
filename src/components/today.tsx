@@ -31,7 +31,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import { QUICK_ADD_ML, useAppStore } from '@/lib/app/store';
-import { formatCost } from '@/lib/domain/budget';
+import { formatCost, totalCost } from '@/lib/domain/budget';
 import { budgetLine } from '@/lib/domain/grocery';
 import { formatCountdown, formatDuration, formatMinute, humanDate, shortDate } from '@/lib/domain/time';
 import { DISCLAIMER_SHORT } from '@/lib/domain/safety';
@@ -309,8 +309,11 @@ export function Today(): ReactNode {
   const { resolution, plan, snapshot } = day;
   const progress = snapshot.progress;
   const advisory = snapshot.advisory;
-  const hydration = state.hydration.filter((h) => h.date === today).reduce((sum, h) => sum + h.ml, 0);
+  // The same capped figure the meter uses, so the header and the bar can never
+  // disagree about how much has been drunk.
+  const hydration = day.consumedMl;
   const groceryToBuy = snapshot.grocery.filter((item) => item.purchaseRequired && !item.owned);
+  const groceryCost = totalCost(groceryToBuy.map((item) => item.estimatedCost));
   const budget = budgetLine(Math.round(plan.totalCost.value), state.settings.dailyBudget);
   const budgetTone = budget.tone === 'over' ? 'alert' : budget.tone === 'under' ? 'accent' : 'warm';
   const skipOptions = skipping
@@ -338,6 +341,11 @@ export function Today(): ReactNode {
       .filter(([, d]) => d === today)
       .map(([id]) => id),
   );
+  // The movement event is the one non-meal thing the day counts towards "done".
+  const exerciseEvent = snapshot.schedule.events.find((e) => e.kind === 'exercise') ?? null;
+  const exerciseDone = exerciseEvent !== null && doneIds.has(exerciseEvent.id);
+  const windDownLogged = state.sleep.some((s) => s.date === today);
+
   const doneCount = resolution.completedCount;
   const totalCount = resolution.totalCount;
   const allDone = totalCount > 0 && doneCount >= totalCount;
@@ -400,8 +408,7 @@ export function Today(): ReactNode {
               <Ring
                 value={progress.overall}
                 label="Where you are"
-                caption={progress.nutrition.detail}
-                tone={allDone ? 'accent' : 'accent'}
+                caption="Meals, water, movement and sleep"
               />
               <div className="w-full min-w-0 flex-1">
                 <SectionTitle
@@ -433,6 +440,12 @@ export function Today(): ReactNode {
                     label="Movement"
                     detail={progress.exercise.detail}
                     tone="warm"
+                  />
+                  <Meter
+                    value={progress.sleep.value}
+                    label="Sleep routine"
+                    detail={progress.sleep.detail}
+                    tone="calm"
                   />
                 </div>
               </div>
@@ -528,7 +541,7 @@ export function Today(): ReactNode {
           <Card>
             <SectionTitle
               title="Shopping list"
-              hint={`${groceryToBuy.length} to buy · ${formatCost(day.plan.totalCost)} estimated`}
+              hint={`${groceryToBuy.length} to buy · ${formatCost(groceryCost)} estimated`}
               icon={<ShoppingBasket size={16} className="text-accent" />}
               action={<Pill tone="neutral">{groceryToBuy.length}</Pill>}
             />
@@ -626,6 +639,21 @@ export function Today(): ReactNode {
               <TrendingUp size={13} className="mt-0.5 shrink-0 text-ink-4" aria-hidden />
               {day.workout.whyItMatters}
             </p>
+            {exerciseEvent ? (
+              <div className="mt-4 border-t border-line pt-3">
+                <Button
+                  size="sm"
+                  variant={exerciseDone ? 'secondary' : 'primary'}
+                  onClick={() => {
+                    if (!exerciseEvent) return;
+                    if (exerciseDone) store.uncompleteEvent(exerciseEvent.id);
+                    else store.completeEvent(exerciseEvent.id, today);
+                  }}
+                >
+                  {exerciseDone ? 'Undo done' : 'Mark movement done'}
+                </Button>
+              </div>
+            ) : null}
           </Card>
         </section>
 
@@ -665,7 +693,16 @@ export function Today(): ReactNode {
                 </li>
               ))}
             </ol>
-            <p className="mt-1 flex items-start gap-2 rounded-md bg-surface-2 px-3 py-2 text-xs leading-relaxed text-ink-3">
+            <div className="mt-4">
+              <Button
+                size="sm"
+                variant={windDownLogged ? 'secondary' : 'primary'}
+                onClick={() => store.logSleep(today, !windDownLogged)}
+              >
+                {windDownLogged ? 'Undo wind-down' : 'Mark wind-down done'}
+              </Button>
+            </div>
+            <p className="mt-3 flex items-start gap-2 rounded-md bg-surface-2 px-3 py-2 text-xs leading-relaxed text-ink-3">
               <Moon size={13} className="mt-0.5 shrink-0 text-ink-4" aria-hidden />
               {SLEEP_DISCLAIMER}
             </p>

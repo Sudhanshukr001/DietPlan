@@ -1,4 +1,5 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
+import { isValidElement } from 'react';
 import { Check } from 'lucide-react';
 
 /** Small presentational primitives shared by onboarding and today. */
@@ -412,21 +413,38 @@ export function Chip({
   );
 }
 
+/**
+ * A `<label>` wraps its whole subtree: clicking the heading (or the hint)
+ * activates whatever control it finds. That is right for a text input, and
+ * wrong for a group of Choice/Chip buttons, where tapping the question silently
+ * re-selected the *first* option and undid the user's answer. So the label is
+ * only used when the children really are one control.
+ */
+function isNativeControl(children: ReactNode): boolean {
+  if (!isValidElement(children)) return false;
+  const type = children.type;
+  return type === 'input' || type === 'select' || type === 'textarea';
+}
+
 export function Field({
   label,
   hint,
   children,
+  control = false,
 }: {
   readonly label: string;
   readonly hint?: string;
   readonly children: ReactNode;
+  /** Force label semantics when the control is wrapped, e.g. by a ₹ prefix. */
+  readonly control?: boolean;
 }): ReactNode {
+  const Tag = control || isNativeControl(children) ? 'label' : 'div';
   return (
-    <label className="block">
+    <Tag className="block">
       <span className="text-[0.8125rem] font-semibold text-ink">{label}</span>
       {hint ? <span className="mt-0.5 block text-xs leading-relaxed text-ink-3">{hint}</span> : null}
       <div className="mt-2">{children}</div>
-    </label>
+    </Tag>
   );
 }
 

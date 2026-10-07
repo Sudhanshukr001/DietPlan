@@ -16,8 +16,26 @@ import { REGIONS } from '@/lib/domain/seasonal';
 import { ACTIVITY_LABELS, GOAL_DESCRIPTIONS, GOAL_LABELS } from '@/lib/domain/nutrition';
 import { LEVEL_DESCRIPTIONS, LEVEL_LABELS } from '@/lib/domain/fitness';
 import { defaultDiet, defaultHealth, defaultProfile, defaultSettings } from '@/lib/domain/defaults';
+import { deriveSchedule } from '@/lib/domain/schedule';
 import { parseMinute24 } from '@/lib/domain/time';
-import { normaliseNumericText, parseNumericText, sanitizeNumericText } from '@/lib/domain/units';
+import {
+  AGE_MAX,
+  AGE_MIN,
+  BUDGET_MAX,
+  BUDGET_MIN,
+  HEIGHT_CM_MAX,
+  HEIGHT_CM_MIN,
+  WEIGHT_KG_MAX,
+  WEIGHT_KG_MIN,
+  checkAge,
+  checkBudget,
+  checkHeight,
+  checkWeight,
+  clampNumber,
+  normaliseNumericText,
+  parseNumericText,
+  sanitizeNumericText,
+} from '@/lib/domain/units';
 import type {
   ActivityLevel,
   DeclaredCondition,
@@ -59,6 +77,7 @@ interface Draft {
   wake: string;
   sleep: string;
   exerciseMinute: string;
+  exerciseMinutes: string;
   hasGymAccess: boolean;
 }
 
@@ -82,6 +101,7 @@ function initialDraft(): Draft {
     wake: '07:00',
     sleep: '23:00',
     exerciseMinute: '18:00',
+    exerciseMinutes: '30',
     hasGymAccess: false,
   };
 }
@@ -137,17 +157,18 @@ export function Onboarding({
   const heightCm = parseNumericText(draft.heightCm);
   const weightKg = parseNumericText(draft.weightKg, 1);
   const dailyBudget = parseNumericText(draft.dailyBudget);
+  const exerciseMinutes = parseNumericText(draft.exerciseMinutes);
 
-  const valid =
-    age !== null &&
-    age >= 13 &&
-    age <= 100 &&
-    heightCm !== null &&
-    heightCm >= 120 &&
-    heightCm <= 230 &&
-    weightKg !== null &&
-    weightKg >= 30 &&
-    weightKg <= 200;
+  // One set of bounds, shared with the migration clamp and the You tab, so a
+  // value accepted here can never be rewritten somewhere else later.
+  const ageCheck = checkAge(age);
+  const heightCheck = checkHeight(heightCm);
+  const weightCheck = checkWeight(weightKg);
+  const budgetCheck = checkBudget(dailyBudget);
+  const vitalsProblem = [ageCheck, heightCheck, weightCheck].find((c) => !c.ok)?.message ?? '';
+  const budgetProblem = budgetCheck.ok ? '' : budgetCheck.message;
+  const valid = vitalsProblem === '' && budgetProblem === '';
+  const stepProblem = step === 0 ? vitalsProblem : step === 1 ? budgetProblem : '';
 
   const finish = (): void => {
     const base = defaultProfile();
@@ -170,20 +191,31 @@ export function Onboarding({
         activityLevel: draft.activityLevel,
         goal: draft.goal,
         fitnessLevel: draft.fitnessLevel,
-        exerciseMinutesPerDay: 25,
+        exerciseMinutesPerDay: clampNumber(
+          exerciseMinutes ?? base.exerciseMinutesPerDay,
+          0,
+          180,
+        ),
         hasGymAccess: draft.hasGymAccess,
-        schedule: {
-          ...base.schedule,
+        // Meal times are derived from the wake/sleep the user just typed — not
+        // left at the 8:30/13:30/20:00 defaults.
+        schedule: deriveSchedule({
           wakeMinute: wake,
           sleepMinute: sleep,
           exerciseMinute: exercise,
-        },
+          chronotype: base.schedule.chronotype,
+          workPattern: base.schedule.workPattern,
+          goal: draft.goal,
+        }),
         acceptedSafetyVersion: SAFETY_VERSION,
         onboardingComplete: true,
       },
       diet: { ...dietBase, dietType: draft.dietType, allergies: [...new Set(draft.allergies)] },
       health: { ...healthBase, declaredConditions: draft.conditions },
-      settings: { ...settingsBase, dailyBudget: Math.round(dailyBudget ?? settingsBase.dailyBudget) },
+      settings: {
+        ...settingsBase,
+        dailyBudget: clampNumber(dailyBudget ?? settingsBase.dailyBudget, BUDGET_MIN, BUDGET_MAX),
+      },
     });
   };
 
@@ -235,8 +267,8 @@ export function Onboarding({
                   className={inputClass}
                   type="number"
                   inputMode="numeric"
-                  min={13}
-                  max={100}
+                  min={AGE_MIN}
+                  max={AGE_MAX}
                   value={draft.age}
                   onChange={(e) => set('age', sanitizeNumericText(e.target.value))}
                   onBlur={(e) => set('age', normaliseNumericText(e.target.value))}
@@ -259,8 +291,8 @@ export function Onboarding({
                   className={inputClass}
                   type="number"
                   inputMode="decimal"
-                  min={120}
-                  max={230}
+                  min={HEIGHT_CM_MIN}
+                  max={HEIGHT_CM_MAX}
                   value={draft.heightCm}
                   onChange={(e) => set('heightCm', sanitizeNumericText(e.target.value))}
                   onBlur={(e) => set('heightCm', normaliseNumericText(e.target.value))}
@@ -271,8 +303,8 @@ export function Onboarding({
                   className={inputClass}
                   type="number"
                   inputMode="decimal"
-                  min={30}
-                  max={200}
+                  min={WEIGHT_KG_MIN}
+                  max={WEIGHT_KG_MAX}
                   step={0.5}
                   value={draft.weightKg}
                   onChange={(e) => set('weightKg', sanitizeNumericText(e.target.value, 1))}
@@ -347,7 +379,11 @@ export function Onboarding({
               </div>
             </Field>
 
-            <Field label="What is your food budget for a day?" hint="Roughly, for everything you eat.">
+            <Field
+              label="What is your food budget for a day?"
+              hint="Roughly, for everything you eat."
+              control
+            >
               <div className="relative">
                 <span className="nums pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-sm font-semibold text-ink-3">
                   &#8377;
@@ -356,14 +392,19 @@ export function Onboarding({
                   className={`${inputClass} nums pl-8`}
                   type="number"
                   inputMode="numeric"
-                  min={50}
-                  max={2000}
-                step={10}
+                  min={BUDGET_MIN}
+                  max={BUDGET_MAX}
+                  step={10}
                   value={draft.dailyBudget}
                   onChange={(e) => set('dailyBudget', sanitizeNumericText(e.target.value))}
                   onBlur={(e) => set('dailyBudget', normaliseNumericText(e.target.value))}
                 />
               </div>
+              {budgetProblem ? (
+                <p role="alert" className="mt-1.5 text-xs font-medium text-alert">
+                  {budgetProblem}
+                </p>
+              ) : null}
             </Field>
           </Card>
         ) : null}
@@ -387,7 +428,7 @@ export function Onboarding({
                   onChange={(e) => set('sleep', e.target.value)}
                 />
               </Field>
-              <Field label="Exercise">
+              <Field label="Exercise time">
                 <input
                   className={inputClass}
                   type="time"
@@ -396,6 +437,18 @@ export function Onboarding({
                 />
               </Field>
             </div>
+            <Field label="How long do you exercise for?" hint="Minutes in a day. This sets your workout and your water target.">
+              <input
+                className={`${inputClass} nums`}
+                type="number"
+                inputMode="numeric"
+                min={0}
+                max={180}
+                value={draft.exerciseMinutes}
+                onChange={(e) => set('exerciseMinutes', sanitizeNumericText(e.target.value))}
+                onBlur={(e) => set('exerciseMinutes', normaliseNumericText(e.target.value))}
+              />
+            </Field>
             <Field label="What are you working towards?" hint="Pick one. You can change it any time.">
               <div className="grid gap-2">
                 {(Object.keys(GOAL_LABELS) as FitnessGoal[]).map((goal) => (
@@ -479,7 +532,12 @@ export function Onboarding({
         ) : null}
       </div>
 
-      <footer className="glass fixed inset-x-0 bottom-0 z-20 mx-auto flex w-full max-w-xl items-center gap-3 border-t border-line px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 shadow-[0_-8px_24px_-12px_rgb(0_0_0/0.18)]">
+      <footer className="glass fixed inset-x-0 bottom-0 z-20 mx-auto flex w-full max-w-xl flex-wrap items-center gap-3 border-t border-line px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 shadow-[0_-8px_24px_-12px_rgb(0_0_0/0.18)]">
+        {stepProblem ? (
+          <p role="alert" className="w-full text-xs font-medium leading-relaxed text-alert">
+            {stepProblem}
+          </p>
+        ) : null}
         {step > 0 ? (
           <Button variant="secondary" size="lg" onClick={() => setStep(step - 1)} aria-label="Go back a step">
             <ArrowLeft size={17} aria-hidden />
@@ -487,14 +545,14 @@ export function Onboarding({
           </Button>
         ) : null}
         {step < STEPS.length - 1 ? (
-          <Button size="lg" onClick={() => setStep(step + 1)} fullWidth>
+          <Button size="lg" onClick={() => setStep(step + 1)} disabled={stepProblem !== ''} fullWidth>
             Continue
             <ArrowRight size={17} aria-hidden />
           </Button>
         ) : (
           <Button size="lg" onClick={finish} disabled={!valid} fullWidth>
             <Sparkles size={17} aria-hidden />
-            {valid ? 'Show me my day' : 'Check age, height and weight'}
+            {valid ? 'Show me my day' : 'Check your details'}
           </Button>
         )}
       </footer>
